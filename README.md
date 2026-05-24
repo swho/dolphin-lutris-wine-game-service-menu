@@ -29,8 +29,10 @@ The plugin sets:
 - runner: Wine
 - executable: the selected file
 - Wine prefix: configured during install
+- artwork: fills missing cover, banner, and icon from the executable icon
 
-Other Lutris settings are left to Lutris defaults.
+Existing cover art, banners, and icons are left untouched. Other Lutris settings
+are left to Lutris defaults.
 
 ## Uninstall
 
