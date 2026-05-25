@@ -24,12 +24,18 @@ GENERIC_DIR_NAMES = {
     "bin",
     "binaries",
     "binary",
+    "boot",
     "client",
+    "content",
     "data",
+    "engine",
     "game",
     "games",
     "launcher",
+    "plugins",
     "retail",
+    "redist",
+    "redistributables",
     "win64",
     "win32",
     "x64",
@@ -80,14 +86,56 @@ def normalize_path(path):
     return os.path.normcase(os.path.realpath(os.path.expanduser(str(path))))
 
 
+def is_generic_dir_name(name):
+    return name.casefold() in GENERIC_DIR_NAMES
+
+
+def split_title_words(name):
+    return [
+        word
+        for word in name.replace(".", " ").replace("-", " ").replace("_", " ").split()
+        if word
+    ]
+
+
+def directory_name_score(name):
+    folded = name.casefold()
+    if is_generic_dir_name(name) or name.startswith("."):
+        return -1000
+
+    words = split_title_words(name)
+    text = " ".join(words)
+    score = len(text)
+
+    if len(words) > 1:
+        score += 20
+    if any(char.isupper() for char in name):
+        score += 6
+    if any(char.isdigit() for char in name):
+        score += 2
+    if len(folded) <= 4 and name.isascii() and name.islower():
+        score -= 30
+
+    return score
+
+
 def get_game_name(path):
-    parts = path.resolve().parts
-    for index in range(len(parts) - 2, -1, -1):
-        if parts[index].casefold() == "games" and index + 1 < len(parts) - 1:
-            return parts[index + 1]
+    parts = path.resolve().parent.parts
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index].casefold() != "games":
+            continue
+
+        candidates = list(parts[index + 1 :])
+        while candidates and is_generic_dir_name(candidates[-1]):
+            candidates.pop()
+        if candidates:
+            return max(
+                enumerate(candidates),
+                key=lambda item: (directory_name_score(item[1]), -item[0]),
+            )[1]
 
     directory = path.parent
-    while directory.name and directory.name.casefold() in GENERIC_DIR_NAMES:
+    while directory.name and is_generic_dir_name(directory.name):
         if directory.parent == directory:
             break
         directory = directory.parent
