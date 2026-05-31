@@ -167,6 +167,23 @@ def load_font(size):
     return ImageFont.load_default()
 
 
+def image_has_visible_content(image):
+    if image is None:
+        return False
+    alpha = image.convert("RGBA").getchannel("A")
+    return alpha.getbbox() is not None
+
+
+def image_file_has_visible_content(path):
+    if Image is None or not path.exists():
+        return False
+    try:
+        with Image.open(path) as image:
+            return image_has_visible_content(image)
+    except Exception:
+        return False
+
+
 def dib_to_rgba(data):
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return Image.open(io.BytesIO(data)).convert("RGBA")
@@ -237,9 +254,16 @@ def dib_to_rgba(data):
             index = (y * width + x) * 4
             pixels[index : index + 4] = bytes((r, g, b, a))
 
+    has_explicit_alpha = bit_count == 32 and any(
+        pixels[index] for index in range(3, len(pixels), 4)
+    )
+    if bit_count == 32 and not has_explicit_alpha:
+        for index in range(3, len(pixels), 4):
+            pixels[index] = 255
+
     mask_offset = offset + stride * height
     mask_stride = ((width + 31) // 32) * 4
-    if mask_offset + mask_stride * height <= len(data):
+    if not has_explicit_alpha and mask_offset + mask_stride * height <= len(data):
         for y in range(height):
             src_y = y if top_down else (height - 1 - y)
             row = data[mask_offset + src_y * mask_stride : mask_offset + src_y * mask_stride + mask_stride]
@@ -250,9 +274,31 @@ def dib_to_rgba(data):
     return Image.frombytes("RGBA", (width, height), bytes(pixels))
 
 
+def extract_icon_with_lutris(exe_path):
+    try:
+        from lutris.util.wine.extract_icon import IconExtractor
+
+        icon = IconExtractor(str(exe_path)).get_best_icon(128)
+        if icon is None:
+            return None
+
+        icon = icon.convert("RGBA")
+        icon.load()
+        if image_has_visible_content(icon):
+            return icon
+    except Exception:
+        return None
+
+    return None
+
+
 def extract_best_icon_image(exe_path):
     if pefile is None or Image is None:
         return None
+
+    lutris_icon = extract_icon_with_lutris(exe_path)
+    if lutris_icon is not None:
+        return lutris_icon
 
     pe = pefile.PE(str(exe_path), fast_load=True)
     pe.parse_data_directories(
@@ -316,7 +362,9 @@ def extract_best_icon_image(exe_path):
 
     for _score, data in sorted(candidates, key=lambda candidate: candidate[0], reverse=True):
         try:
-            return dib_to_rgba(data)
+            icon = dib_to_rgba(data)
+            if image_has_visible_content(icon):
+                return icon
         except Exception:
             continue
     return None
@@ -359,20 +407,20 @@ def draw_centered_text(draw, text, font, box, fill):
 
 def make_cover(icon, game_name):
     width, height = 264, 352
-    base = Image.new("RGB", (width, height), (20, 24, 28)).convert("RGBA")
+    base = Image.new("RGB", (width, height), (18, 23, 27)).convert("RGBA")
     background = fit_icon(icon, (width, width)).convert("RGBA")
     background = background.resize((width, width), Image.Resampling.LANCZOS)
     background = background.filter(ImageFilter.GaussianBlur(14))
     base.alpha_composite(background, (0, 42))
-    base.alpha_composite(Image.new("RGBA", (width, height), (8, 10, 12, 205)))
+    base.alpha_composite(Image.new("RGBA", (width, height), (7, 10, 13, 168)))
 
-    logo = fit_icon(icon, (136, 136))
+    logo = fit_icon(icon, (178, 178))
     x = (width - logo.width) // 2
-    y = 62 + (136 - logo.height) // 2
-    shadow = Image.new("RGBA", (logo.width + 20, logo.height + 20), (0, 0, 0, 0))
-    shadow.alpha_composite(logo, (10, 10))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(10))
-    base.alpha_composite(shadow, (x - 10, y - 10))
+    y = 38 + (178 - logo.height) // 2
+    shadow = Image.new("RGBA", (logo.width + 44, logo.height + 44), (0, 0, 0, 0))
+    shadow.alpha_composite(logo, (22, 22))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+    base.alpha_composite(shadow, (x - 22, y - 22))
     base.alpha_composite(logo, (x, y))
 
     draw = ImageDraw.Draw(base)
@@ -380,7 +428,7 @@ def make_cover(icon, game_name):
         draw,
         game_name,
         load_font(19),
-        (20, 224, width - 20, 314),
+        (20, 238, width - 20, 324),
         (245, 245, 242, 255),
     )
     return base.convert("RGB")
@@ -392,9 +440,9 @@ def make_banner(icon, game_name):
     background = fit_icon(icon, (width, width)).resize((width, width), Image.Resampling.LANCZOS)
     background = background.filter(ImageFilter.GaussianBlur(10))
     base.alpha_composite(background, (-18, -56))
-    base.alpha_composite(Image.new("RGBA", (width, height), (5, 8, 12, 185)))
+    base.alpha_composite(Image.new("RGBA", (width, height), (5, 8, 12, 150)))
 
-    logo = fit_icon(icon, (42, 42))
+    logo = fit_icon(icon, (52, 52))
     base.alpha_composite(logo, (10, (height - logo.height) // 2))
 
     title = game_name.replace(".", " ").replace("-", " ")
@@ -402,7 +450,7 @@ def make_banner(icon, game_name):
         title = title[:23].rstrip() + "..."
 
     draw = ImageDraw.Draw(base)
-    draw.text((60, 25), title, font=load_font(12), fill=(248, 248, 244, 255))
+    draw.text((72, 25), title, font=load_font(12), fill=(248, 248, 244, 255))
     return base.convert("RGB")
 
 
@@ -417,9 +465,10 @@ def ensure_lutris_media(settings, exe_path, slug, game_name):
     banner_path = banner_dir / f"{slug}.jpg"
     icon_path = icon_dir / f"lutris_{slug}.png"
 
-    need_cover = not cover_path.exists()
-    need_banner = not banner_path.exists()
-    need_icon = not icon_path.exists()
+    replace_broken_icon = icon_path.exists() and not image_file_has_visible_content(icon_path)
+    need_cover = not cover_path.exists() or replace_broken_icon
+    need_banner = not banner_path.exists() or replace_broken_icon
+    need_icon = not icon_path.exists() or replace_broken_icon
     if not (need_cover or need_banner or need_icon):
         return 0
 
